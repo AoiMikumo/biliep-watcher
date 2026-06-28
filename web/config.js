@@ -1,6 +1,6 @@
 // ── 全局配置 & 魔法数字 ─────────────────────────────────────────────
 // 版本号（同步更新 buildDOM 里的版本徽章与 <title>）
-export const VERSION = '1.4.0';
+export const VERSION = '1.4.1';
 
 // 图表颜色序列
 export const COLORS = [

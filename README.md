@@ -195,7 +195,7 @@ location /bili/ {
 
 ## 版本
 
-当前 `1.4.0`（见 [`web/config.js`](web/config.js) 的 `VERSION`，同步页面版本徽章与标题）。
+当前 `1.4.1`（见 [`web/config.js`](web/config.js) 的 `VERSION`，同步页面版本徽章与标题）。
 
 ## 许可
 
