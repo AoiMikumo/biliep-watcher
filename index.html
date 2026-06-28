@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>视频合集数据分析</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="web/style.css" />
+</head>
+<body>
+<div id="app">
+
+  <div id="loading-screen">
+    <div class="spinner"></div>
+    <p class="loading-text">正在加载数据…</p>
+  </div>
+
+  <div id="error-screen" style="display:none">
+    <div class="error-icon">&#9888;&#65039;</div>
+    <p id="error-msg" style="font-size:1rem;font-weight:600">加载失败</p>
+    <p id="error-detail" style="font-size:12px;color:#94a3b8"></p>
+  </div>
+
+  <div id="dashboard" style="display:none">
+
+    <div class="header">
+      <div class="header-inner">
+        <div>
+          <div class="header-badge"><span>&#128202;</span><span>B站视频合集数据分析</span></div>
+          <h1 id="hd-title">—</h1>
+          <div class="header-sub" id="hd-sub"></div>
+        </div>
+        <div class="header-right">
+          <button class="refresh-btn" id="refresh-btn" title="重新拉取最新数据">
+            <i class="ri">&#8635;</i> 刷新数据
+          </button>
+          <div class="header-tag" id="hd-update">—</div>
+          <div class="header-snap" id="hd-snapshots"></div>
+          <div class="header-snap" id="hd-range"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="container">
+
+      <div class="window-row row" id="window-row">
+        <span class="window-label">增量统计窗口</span>
+        <div class="window-pills" id="window-pills"></div>
+        <span class="window-note" id="window-note"></span>
+      </div>
+
+      <div class="filter-row row" id="filter-row" style="display:none">
+        <span class="filter-label">小节筛选</span>
+        <div class="filter-pills" id="filter-pills"></div>
+        <button class="filter-all-btn" id="filter-all-btn">全选/重置</button>
+      </div>
+
+      <div class="grid-7 row" id="stat-cards"></div>
+
+      <div class="grid-2 row">
+        <div class="card">
+          <div class="card-hd">
+            <span class="card-label">总量趋势</span>
+            <div class="metric-btns" id="trend-btns"></div>
+          </div>
+          <div class="chart-wrap h280"><canvas id="chart-trend"></canvas></div>
+        </div>
+        <div class="card">
+          <div class="card-hd">
+            <div class="card-hd-left">
+              <span class="card-label">播放占比</span>
+              <div class="seg-ctrl" id="pie-seg">
+                <button class="seg-opt active" data-mode="cum">总计</button>
+                <button class="seg-opt" data-mode="delta">增量</button>
+              </div>
+              <span class="card-subnote" id="pie-note"></span>
+            </div>
+          </div>
+          <div class="pie-single-wrap">
+            <div class="pie-chart-box"><canvas id="chart-pie"></canvas></div>
+            <div class="pie-legend-col" id="pie-legend"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-2-eq row">
+        <div class="card">
+          <div class="card-hd">
+            <div class="card-hd-left">
+              <span class="card-label">播放和互动指标</span>
+              <div class="seg-ctrl" id="bar-seg">
+                <button class="seg-opt active" data-mode="list">列表顺序</button>
+                <button class="seg-opt" data-mode="val">按值排序</button>
+              </div>
+              <div class="metric-btns" id="bar-btns"></div>
+              <span class="card-subnote" id="bar-scope-note"></span>
+            </div>
+          </div>
+          <div class="dyn-wrap" id="bar-chart-wrap"><canvas id="chart-bar"></canvas></div>
+        </div>
+        <div class="card">
+          <div class="card-hd">
+            <div class="card-hd-left">
+              <span class="card-label">综合评分</span>
+              <div class="seg-ctrl" id="eng-seg">
+                <button class="seg-opt active" data-mode="list">列表顺序</button>
+                <button class="seg-opt" data-mode="val">评分排序</button>
+              </div>
+              <span class="card-subnote" id="engage-scope-note"></span>
+              <span class="algo-note">使用<a href="https://space.bilibili.com/398300398" target="_blank" rel="noopener noreferrer">哔哩哔哩周刊</a>算法</span>
+            </div>
+            <div class="metric-btns-spacer" style="display:none"></div>
+          </div>
+          <div class="dyn-wrap" id="engage-chart-wrap"><canvas id="chart-engagement"></canvas></div>
+        </div>
+      </div>
+
+      <div class="card row">
+        <div class="card-hd">
+          <div class="card-hd-left">
+            <span class="card-label">趋势对比</span>
+            <span class="card-subnote" id="multi-scope-note"></span>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <button class="toggle-pill" id="multi-toggle" style="display:none">显示全部</button>
+            <div class="metric-btns" id="multi-btns"></div>
+          </div>
+        </div>
+        <div id="multi-notice"></div>
+        <div class="multi-wrap">
+          <div class="chart-wrap h400" style="flex:1;min-width:0"><canvas id="chart-multi"></canvas></div>
+          <div class="multi-legend-col" id="multi-legend"></div>
+        </div>
+      </div>
+
+      <div class="card row" id="delta-card">
+        <div class="card-hd">
+          <div class="card-hd-left">
+            <span class="card-label">播放量增量（相邻采样差値）</span>
+          </div>
+        </div>
+        <div class="chart-wrap h280"><canvas id="chart-delta"></canvas></div>
+      </div>
+
+      <div class="card row">
+        <div class="card-hd">
+          <div class="card-hd-left">
+            <span class="card-label">详细数据</span>
+            <span class="card-subnote">点击表头可排序</span>
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table id="data-table">
+            <thead><tr id="table-head"></tr></thead>
+            <tbody id="table-body"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="footer">
+        数据来源：B站 API &middot; 采集间隔 10 分钟 &middot; 本页面仅供内部分析参考
+      </div>
+
+    </div>
+  </div>
+
+</div>
+<div id="refresh-toast"></div>
+<div class="version-badge" id="version-badge"></div>
+<div id="chart-tip"></div>
+<script type="module" src="web/main.js"></script>
+</body>
+</html>
