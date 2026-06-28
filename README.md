@@ -2,8 +2,8 @@
 
 一个轻量的自托管工具：**定时采集 B 站「视频合集」的播放/互动数据，并提供一个零依赖的网页看板做可视化分析。**
 
-- 采集器（`watcher.js`）每隔固定分钟数对接 B 站公开接口，把整个合集的累计数据按快照追加保存。
-- 看板（`index.html` + `web/`）直接读取这些数据文件，提供总量趋势、增量、占比、各视频排行、综合评分、趋势对比、明细表等图表，并可**按小节筛选**。
+- 采集端（`server/`）每隔固定分钟数对接 B 站公开接口，把整个合集的累计数据按快照追加保存。
+- 看板（`web/`）直接读取这些数据文件，提供总量趋势、增量、占比、各视频排行、综合评分、趋势对比、明细表等图表，并可**按小节筛选**。
 
 ---
 
@@ -21,16 +21,16 @@
 ## 工作原理
 
 ```
-                    ┌──────────────┐   每 N 分钟，每个合集 1 次请求
-   list.json ─────▶ │  watcher.js  │ ───────────────────────────▶  B 站 view 接口
- (要追踪的合集)      └──────┬───────┘        (含 ugc_season：全部小节 + 投稿)
-                           │ 解析 + 落盘
-                           ▼
-        data/season_<id>.json   元数据 + 当前归属 + moves 变更日志
-        data/season_<id>.jsonl  纯事实快照（每周期 1 行，追加）
-                           │
-                           ▼  浏览器直读两份文件（无后端、无客户端合并）
-                  index.html + web/  ──▶  ?seasonid=<id> 看板
+                       ┌──────────────────┐   每 N 分钟，每个合集 1 次请求
+ server/list.json ───▶ │ server/watcher.js │ ───────────────────▶  B 站 view 接口
+   (要追踪的合集)       └─────────┬────────┘      (含 ugc_season：全部小节 + 投稿)
+                                 │ 解析 + 落盘
+                                 ▼
+        web/data/season_<id>.json   元数据 + 当前归属 + moves 变更日志
+        web/data/season_<id>.jsonl  纯事实快照（每周期 1 行，追加）
+                                 │
+                                 ▼  浏览器直读两份文件（无后端、无客户端合并）
+                  web/ (静态站点根) ──▶  /index.html?seasonid=<id> 看板
 ```
 
 采集用的是 B 站 `https://api.bilibili.com/x/web-interface/view?aid=<aid>` 接口：用合集里**任意一个**投稿的 av 号即可反查到整个合集的全部小节与投稿数据，**无需 Cookie**。
@@ -40,18 +40,22 @@
 ## 目录结构
 
 ```
-watcher/
-├── watcher.js        采集器主程序（常驻运行）
-├── lib.js            共享工具（HTTP、合集存储、moves 计算）
-├── list.json         配置：要追踪哪些合集
-├── index.html        看板页面
-├── web/              前端模块
+biliep-watcher/
+├── server/                采集端（Node，常驻运行）
+│   ├── watcher.js         采集器主程序
+│   ├── lib.js             共享工具（HTTP、合集存储、moves 计算）
+│   └── list.json          配置：要追踪哪些合集
+├── web/                   看板（静态站点根，用静态服务器托管此目录）
+│   ├── index.html         入口页面
 │   ├── main.js  config.js  state.js  data.js  ui.js  charts.js  utils.js
 │   ├── style.css
-│   └── src/          指标图标 (view/like/coin/fav/danmaku/reply/share .png)
-└── data/             采集输出（运行时生成）
-    ├── season_<id>.json
-    └── season_<id>.jsonl
+│   ├── src/               指标图标 (view/like/coin/fav/danmaku/reply/share .png)
+│   └── data/              采集输出（运行时生成）
+│       ├── season_<id>.json
+│       └── season_<id>.jsonl
+├── README.md
+├── LICENSE
+└── .gitignore
 ```
 
 ---
@@ -60,13 +64,13 @@ watcher/
 
 - **Node.js 16+**（采集端，纯标准库，无需 `npm install`）。
 - 任意**静态文件服务器**用于托管看板（nginx / caddy / `python -m http.server` 等）。
-- 看板默认通过 CDN 加载 Chart.js（`index.html` 中的 `cdn.jsdelivr.net`）；内网环境可自行改为本地引入。
+- 看板默认通过 CDN 加载 Chart.js（`web/index.html` 中的 `cdn.jsdelivr.net`）；内网环境可自行改为本地引入。
 
 ---
 
 ## 快速开始
 
-### 1) 配置 `list.json`
+### 1) 配置 `server/list.json`
 
 填入要追踪的合集：
 
@@ -90,31 +94,31 @@ watcher/
 >   | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const u=JSON.parse(s).data;console.log("season_id =",u.ugc_season.id,"| aid =",u.aid)})'
 > ```
 
-`list.json` 每个采集周期都会被重新读取，**增删合集无需重启**采集器。
+`server/list.json` 每个采集周期都会被重新读取，**增删合集无需重启**采集器。
 
 ### 2) 启动采集器
 
 ```bash
-node watcher/watcher.js
+node server/watcher.js
 ```
 
-进程会等到下一个对齐刻点开始采样，之后每隔 `INTERVAL_MIN`（默认 10）分钟采一次，数据追加写入 `watcher/data/`。建议用 `pm2` / `systemd` / `nohup` 等常驻运行。
+进程会等到下一个对齐刻点开始采样，之后每隔 `INTERVAL_MIN`（默认 10）分钟采一次，数据追加写入 `web/data/`。建议用 `pm2` / `systemd` / `nohup` 等常驻运行。
 
 ### 3) 部署看板
 
-把 **`watcher/` 目录**作为静态站点根目录托管（看板用相对路径 `data/...` 读取数据），然后访问：
+把 **`web/` 目录**作为静态站点根目录托管（数据就在它下面的 `data/`），然后访问：
 
 ```
 http://<your-host>/index.html?seasonid=8019898
 ```
 
-`?seasonid=<合集 id>` 是必填参数。采集器与静态服务器可同机运行——前者写文件，后者发文件即可。
+`?seasonid=<合集 id>` 是必填参数。采集器与静态服务器可同机运行——前者写 `web/data/`，后者发 `web/` 即可。
 
 nginx 示例：
 
 ```nginx
 location /bili/ {
-    alias /path/to/watcher/;
+    alias /path/to/biliep-watcher/web/;
     add_header Cache-Control "no-store";   # data/ 频繁更新，建议禁缓存
 }
 ```
@@ -123,12 +127,12 @@ location /bili/ {
 
 ## 配置项
 
-`watcher.js` 顶部：
+`server/watcher.js` 顶部：
 
 | 常量 | 默认 | 说明 |
 |---|---|---|
 | `INTERVAL_MIN` | `10` | 采样间隔（分钟），**必须能整除 60**（1/2/3/4/5/6/10/12/15/20/30/60）。 |
-| `LIST_FILE` | `list.json` | 合集配置文件路径。 |
+| `LIST_FILE` | `server/list.json` | 合集配置文件路径（与采集端代码同级）。 |
 
 ---
 

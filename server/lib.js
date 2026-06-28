@@ -1,12 +1,12 @@
 'use strict';
-// watcher/lib.js — shared helpers for watcher.js.
+// server/lib.js — shared helpers for watcher.js.
 
 const https = require('https');
 const fs    = require('fs');
 const path  = require('path');
 
-const ROOT     = __dirname;
-const DATA_DIR = path.join(ROOT, 'data');
+const ROOT     = __dirname;                              // server/ —— list.json 与本目录同级
+const DATA_DIR = path.join(ROOT, '..', 'web', 'data');   // 数据落在看板的静态根 web/ 下
 
 // ── Date / time (Beijing UTC+8) ───────────────────────────────────────────────
 

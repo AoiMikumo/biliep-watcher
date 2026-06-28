@@ -85,7 +85,7 @@ export function buildStatCards() {
       const iconSpan = document.createElement('span');
       iconSpan.className = 'stat-icon';
       const iconImg = document.createElement('img');
-      iconImg.src = 'web/' + d.icon;
+      iconImg.src = d.icon;
       iconImg.alt = d.label;
       iconImg.className = 'stat-icon-img';
       iconSpan.appendChild(iconImg);
@@ -274,7 +274,7 @@ export function setupBtns(containerId, defaultMetric, onChange) {
     btn.title          = ML[m];
     btn.dataset.metric = m;
     const img = document.createElement('img');
-    img.src = 'web/' + METRIC_ICONS[m];
+    img.src = METRIC_ICONS[m];
     img.alt = ML[m];
     img.className = 'metric-btn-icon';
     btn.appendChild(img);
