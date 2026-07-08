@@ -94,7 +94,7 @@ biliep-watcher/
 >   | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const u=JSON.parse(s).data;console.log("season_id =",u.ugc_season.id,"| aid =",u.aid)})'
 > ```
 
-`server/list.json` 每个采集周期都会被重新读取，**增删合集无需重启**采集器。
+`server/list.json` 每个采集周期都会被重新读取，**增删合集无需重启**采集器。采集器始终采集目标合集的全部小节数据；如果同一个 `season_id` 写了多条配置，会把这些条目的 `aids` 按顺序去重合并。接口返回的合集 id 必须与配置的 `season_id` 一致，否则本轮会跳过该配置，避免把数据写到错误合集文件。
 
 ### 2) 启动采集器
 
@@ -172,7 +172,7 @@ location /bili/ {
 
 > 原子记录就是 `(aid, time) → 指标`。小节归属是**元数据**（存在 `.json`，不在每条快照里重复）；历史归属由 `moves` 无损保留。
 
-**约定**：时间统一北京时间（UTC+8）；日期 `yyyy-mm-dd`，时间戳 `yyyy-mm-dd hh:mm:ss`；JSON 4 空格缩进、UTF-8 无 BOM。
+**约定**：时间统一北京时间（UTC+8）；日期 `yyyy-mm-dd`，时间戳 `yyyy-mm-dd hh:mm:ss`；JSON 元数据文件使用 2 空格缩进，JSONL 快照每行紧凑输出，UTF-8 无 BOM。
 
 ---
 
@@ -195,7 +195,7 @@ location /bili/ {
 
 ## 版本
 
-当前 `1.4.1`（见 [`web/config.js`](web/config.js) 的 `VERSION`，同步页面版本徽章与标题）。
+当前 `1.4.2`（见 [`web/config.js`](web/config.js) 的 `VERSION`，同步页面版本徽章与标题）。
 
 ## 许可
 

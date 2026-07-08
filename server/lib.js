@@ -88,37 +88,29 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // Try aids in order until one returns a valid ugc_season response.
 // Returns { seasonData } or throws if all aids fail.
 
-async function fetchSeason(aids) {
-    let lastErr;
+async function fetchSeason(aids, expectedSeasonId) {
+    const errors = [];
     for (const aid of aids) {
         try {
             const data = await fetchViewWithRetry(aid);
             if (!data.ugc_season)
                 throw new Error(`aid=${aid}: no ugc_season in response`);
+            if (expectedSeasonId != null && data.ugc_season.id !== expectedSeasonId)
+                throw new Error(`aid=${aid}: resolved season=${data.ugc_season.id}, expected season=${expectedSeasonId}`);
             return data;
         } catch (e) {
-            lastErr = e;
+            errors.push(e.message || String(e));
         }
     }
-    throw lastErr ?? new Error('No aids provided');
+    throw new Error(errors.length ? errors.join('; ') : 'No aids provided');
 }
 
-// Given a ugc_season object and a filter set of sectionIds (empty = all),
-// returns an array of { basic, snapshot } for each matched section.
-//
-// basic:    { season_id, section_id, section_title, episodes: [{aid,bvid,title,pubdate}] }
-//           — static info; write to <sectionId>.json once, update only when episodes change
-// snapshot: { time, episodes: [{aid, view, danmaku, reply, fav, coin, share, like}] }
-//           — per-tick stats; append to <sectionId>.jsonl every cycle
-//
-// Link key between the two files: aid
-function extractSectionData(ugc, targetSectionIds, time) {
-    const filterAll = !targetSectionIds || targetSectionIds.length === 0;
+// Given a ugc_season object, returns per-section metadata and pure-fact
+// snapshots used to assemble the season-level files. Link key: aid.
+function extractSectionData(ugc, time) {
     const results   = [];
 
     for (const sec of (ugc.sections ?? [])) {
-        if (!filterAll && !targetSectionIds.includes(sec.id)) continue;
-
         const basicEps    = [];
         const snapshotEps = [];
 
@@ -156,12 +148,6 @@ function extractSectionData(ugc, targetSectionIds, time) {
         });
     }
     return results;
-}
-
-// Write basic JSON (pretty-printed). Always call basicNeedsUpdate first.
-function writeBasicJson(filePath, basic) {
-    ensureDataDir();
-    fs.writeFileSync(filePath, JSON.stringify(basic, null, 2), 'utf8');
 }
 
 // ── Per-season storage (合集为基本单位) ───────────────────────────────────────
@@ -269,26 +255,12 @@ function writeSeason(ugc, sectionData, time) {
     return { movesAdded: newMoves.length, metaChanged };
 }
 
-// Returns true if the basic JSON file is absent or its content differs from
-// the freshly-fetched basic object (episode list or titles changed).
-function basicNeedsUpdate(filePath, basic) {
-    const existing = loadJson(filePath, null);
-    if (!existing) return true;
-    if (existing.section_title !== basic.section_title) return true;
-    const existAids   = (existing.episodes ?? []).map(e => e.aid).join(',');
-    const newAids     = basic.episodes.map(e => e.aid).join(',');
-    if (existAids !== newAids) return true;
-    const existTitles = (existing.episodes ?? []).map(e => e.title).join('\0');
-    const newTitles   = basic.episodes.map(e => e.title).join('\0');
-    return existTitles !== newTitles;
-}
-
 module.exports = {
     ROOT, DATA_DIR, dataPath,
     nowTime, sleep,
     loadJson, appendJsonl,
     fetchSeason,
-    extractSectionData, writeBasicJson, basicNeedsUpdate,
+    extractSectionData,
     seasonJsonPath, seasonJsonlPath,
     assembleSeason, computeMoves, writeSeason,
 };

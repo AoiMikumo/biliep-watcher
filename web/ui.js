@@ -1,6 +1,6 @@
 // ── UI 层：DOM 构建 + 页面组件 ──────────────────────────────────────
 import { VERSION, STAT_DEFS, TABLE_COLS, WINDOWS, MANY_EP, MULTI_DEF, ML, METRIC_ICONS } from './config.js';
-import { fmt, fmtFull, fmtPct, fmtDate, shortT, attachTip, parseBeijingTime, computeComposite } from './utils.js';
+import { fmt, fmtFull, fmtDate, shortT, attachTip, parseBeijingTime, computeComposite } from './utils.js';
 import { S } from './state.js';
 import { filterEps, filteredInfoEps, pickBaselineSnap,
          updateWindowNote, updateWindowAvailability } from './data.js';
