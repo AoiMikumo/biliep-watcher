@@ -1,6 +1,6 @@
 // ── UI 层：DOM 构建 + 页面组件 ──────────────────────────────────────
 import { VERSION, STAT_DEFS, TABLE_COLS, WINDOWS, MANY_EP, MULTI_DEF, ML, METRIC_ICONS } from './config.js';
-import { fmt, fmtFull, fmtPct, fmtDate, shortT, attachTip, parseBeijingTime, computeComposite } from './utils.js';
+import { fmt, fmtFull, fmtPct, fmtDate, shortT, attachTip, parseBeijingTime, computeScore } from './utils.js';
 import { S } from './state.js';
 import { filterEps, filteredInfoEps, pickBaselineSnap,
          updateWindowNote, updateWindowAvailability } from './data.js';
@@ -44,20 +44,21 @@ export function showToast(msg) {
 
 // ── Header ────────────────────────────────────────────────────────────
 export function updateHeaderMeta() {
-  const last    = S.snapshots[S.snapshots.length - 1];
-  const first   = S.snapshots[0];
-  const elapsed = S.snapshots.length > 1
-    ? (parseBeijingTime(last.time) - parseBeijingTime(first.time)) / 3600000
-    : 0;
+  const last = S.snapshots[S.snapshots.length - 1];
+  // 快照总数与全历史跨度以 stats.json 为准（本地只有窗口切片）
+  const count = S.stats && S.stats.snapshot_count != null ? S.stats.snapshot_count : S.snapshots.length;
+  const t0 = S.stats && S.stats.first_time ? S.stats.first_time : S.snapshots[0].time;
+  const t1 = S.stats && S.stats.last_time ? S.stats.last_time : last.time;
+  const elapsed = (parseBeijingTime(t1) - parseBeijingTime(t0)) / 3600000;
   document.title = S.info.season_title + ' · 合集数据分析';
   document.getElementById('hd-title').textContent = S.info.season_title;
   document.getElementById('hd-sub').textContent =
     `合集 ${S.info.season_id} · ${S.info.sections.length} 个小节 · 共 ${S.info.episodes.length} 个视频`;
   document.getElementById('hd-update').textContent    = '最后更新：' + last.time;
-  document.getElementById('hd-snapshots').textContent = `已采集 ${S.snapshots.length} 次快照`;
+  document.getElementById('hd-snapshots').textContent = `已采集 ${count} 次快照`;
   document.getElementById('hd-range').textContent =
-    S.snapshots.length > 1
-      ? '跨度 ' + (elapsed < 1 ? Math.round(elapsed * 60) + ' 分钟' : elapsed.toFixed(1) + ' 小时')
+    elapsed > 0
+      ? '跨度 ' + (elapsed < 24 ? elapsed.toFixed(1) + ' 小时' : Math.round(elapsed / 24) + ' 天')
       : '首次采样';
 }
 
@@ -302,6 +303,32 @@ export function setupMultiToggle(onRebuild) {
   });
 }
 
+// ── 综合评分算法注记 ─────────────────────────────────────────────────
+// 算法经 URL 隐式指定：?score=v1 用哔哩哔哩周刊算法，默认（或 ?score=v2）用
+// lovely-lychee 算法。页面不提供切换控件，注记仅说明当前所用算法并附作者链接。
+export function initScoreNote() {
+  const wrap = document.getElementById('algo-note');
+  if (!wrap) return;
+  const v = new URLSearchParams(window.location.search).get('score');
+  S.scoreVersion = v === 'v1' ? 'v1' : 'v2';
+
+  wrap.textContent = '使用 ';
+  const a = document.createElement('a');
+  a.target = '_blank';
+  a.rel = 'noopener noreferrer';
+  if (S.scoreVersion === 'v2') {
+    a.href = 'https://space.bilibili.com/67120081';
+    a.textContent = 'lovely-lychee';
+    wrap.appendChild(a);
+    wrap.append(' 的评分算法');
+  } else {
+    a.href = 'https://space.bilibili.com/398300398';
+    a.textContent = '哔哩哔哩周刊';
+    wrap.appendChild(a);
+    wrap.append(' 算法');
+  }
+}
+
 // ── 数据表格 ──────────────────────────────────────────────────────────
 export function buildTable() {
   const last     = S.snapshots[S.snapshots.length - 1];
@@ -320,7 +347,7 @@ export function buildTable() {
       view, like,
       coin: lat.coin || 0, fav: lat.fav || 0,
       danmaku: lat.danmaku || 0, reply: lat.reply || 0, share: lat.share || 0,
-      composite: computeComposite(lat),
+      composite: computeScore(lat, S.scoreVersion),
       viewGrowth: view - (fir.view || 0)
     };
   });

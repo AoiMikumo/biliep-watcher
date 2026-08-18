@@ -27,9 +27,11 @@
                                  │ 解析 + 落盘
                                  ▼
         web/data/season_<id>.json   元数据 + 当前归属 + moves 变更日志
-        web/data/season_<id>.jsonl  纯事实快照（每周期 1 行，追加）
+        web/data/season_<id>.jsonl  热数据：纯事实快照（每周期 1 行追加，滚动保留最近 30 天）
+        web/data/season_<id>.archive.jsonl  归档：30 天前的过期快照（只追加）
+        web/data/season_<id>.stats.json     采集统计（快照总数/首尾时间）
                                  │
-                                 ▼  浏览器直读两份文件（无后端、无客户端合并）
+                                 ▼  浏览器直读元数据与热数据（无后端、无客户端合并）
                   web/ (静态站点根) ──▶  /index.html?seasonid=<id> 看板
 ```
 
@@ -43,7 +45,8 @@
 biliep-watcher/
 ├── server/                采集端（Node，常驻运行）
 │   ├── watcher.js         采集器主程序
-│   ├── lib.js             共享工具（HTTP、合集存储、moves 计算）
+│   ├── lib.js             共享工具（HTTP、合集存储、moves 计算、热数据滚动归档）
+│   ├── serve-static.js    本地联调用静态服务器（可选，支持 Range）
 │   └── list.json          配置：要追踪哪些合集
 ├── web/                   看板（静态站点根，用静态服务器托管此目录）
 │   ├── index.html         入口页面
@@ -52,7 +55,9 @@ biliep-watcher/
 │   ├── src/               指标图标 (view/like/coin/fav/danmaku/reply/share .png)
 │   └── data/              采集输出（运行时生成）
 │       ├── season_<id>.json
-│       └── season_<id>.jsonl
+│       ├── season_<id>.jsonl
+│       ├── season_<id>.archive.jsonl
+│       └── season_<id>.stats.json
 ├── README.md
 ├── LICENSE
 └── .gitignore
@@ -161,7 +166,7 @@ location /bili/ {
 
 `moves` 中 `from`/`to` 为小节 id，`null` 表示「在合集之外」，三种归属变化统一成一条规则。
 
-### `season_<id>.jsonl` —— 纯事实快照（每周期 1 行，只追加）
+### `season_<id>.jsonl` —— 热数据：纯事实快照（滚动保留最近 30 天）
 
 ```jsonc
 { "time": "2026-06-28 14:19:59",
@@ -172,15 +177,28 @@ location /bili/ {
 
 > 原子记录就是 `(aid, time) → 指标`。小节归属是**元数据**（存在 `.json`，不在每条快照里重复）；历史归属由 `moves` 无损保留。
 
+### `season_<id>.archive.jsonl` —— 归档快照（只追加）
+
+采集端每周期写入快照后做保留维护：热文件中早于「最新快照 −30 天」的行被滚动移入归档文件，热文件因此始终保持在 30 天窗口内，客户端全量拉取热文件即可覆盖全部增量窗口（4h ~ 30d），无需 Range 或分页。归档文件是只追加的完整历史，可供后续全历史分析使用。
+
+### `season_<id>.stats.json` —— 采集统计（每周期重写）
+
+```jsonc
+{ "snapshot_count": 7680, "first_time": "2026-05-08 17:50:00",
+  "last_time": "2026-07-01 01:59:59", "jsonl_bytes": 7030393 }
+```
+
+`snapshot_count`/`first_time` 覆盖归档在内的完整采集历史，用于看板头部的快照数与跨度展示、增量窗口可用性判断，避免为展示这些信息下载全量历史。
+
 **约定**：时间统一北京时间（UTC+8）；日期 `yyyy-mm-dd`，时间戳 `yyyy-mm-dd hh:mm:ss`；JSON 4 空格缩进、UTF-8 无 BOM。
 
 ---
 
 ## 看板功能
 
-- **增量统计窗口**：1h / 4h / 12h / 1d / 3d / 7d，按数据跨度自动启用，并据此计算各项增长。
+- **增量统计窗口**：4h / 12h / 1d / 3d / 7d / 30d，按数据跨度自动启用，并据此计算各项增长；窗口切换纯客户端完成。
 - **小节筛选**：勾选哪些小节，就重算这些小节（按当前归属）下全部视频的所有图表与卡片。
-- **图表**：七项指标统计卡、总量趋势、播放占比（总计/增量）、播放与互动排行（带轴折断）、综合评分（哔哩哔哩周刊算法）、各视频趋势对比（多折线，自动 Top N / 对数轴）、播放量增量、可排序明细表。
+- **图表**：七项指标统计卡、总量趋势、播放占比（总计/增量）、播放与互动排行（带轴折断）、综合评分（默认 lovely-lychee v2 算法，URL 指定 `?score=v1` 切回哔哩哔哩周刊算法）、各视频趋势对比（多折线，自动 Top N / 对数轴）、播放量增量、可排序明细表。
 - **曲线从 0 起**：某视频中途首次出现且首值非 0 时，会在前一个采集点补 0，避免曲线凭空跳起。
 
 ---
@@ -195,7 +213,7 @@ location /bili/ {
 
 ## 版本
 
-当前 `1.4.1`（见 [`web/config.js`](web/config.js) 的 `VERSION`，同步页面版本徽章与标题）。
+当前 `1.5.0`（见 [`web/config.js`](web/config.js) 的 `VERSION`，同步页面版本徽章与标题）。
 
 ## 许可
 

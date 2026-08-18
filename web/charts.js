@@ -1,6 +1,6 @@
 // ── 图表层：所有 Chart.js 图表构建函数 ─────────────────────────────
 import { COLORS, MANY_EP, PIE_MAX, MULTI_DEF, getDownsampleMax, ML } from './config.js';
-import { fmt, fmtFull, fmtAxis, shortT, hexToRgba, fmtTimeLabel, downsample, showTip, hideTip, attachTip, computeComposite, calcLogAxisBounds, isNeatLogTick, calcBrokenAxisConfig, remapToBrokenAxis, inverseFromBrokenAxis, niceTickStep } from './utils.js';
+import { fmt, fmtFull, fmtAxis, shortT, hexToRgba, fmtTimeLabel, downsample, showTip, hideTip, attachTip, computeComposite, computeScore, calcLogAxisBounds, isNeatLogTick, calcBrokenAxisConfig, remapToBrokenAxis, inverseFromBrokenAxis, niceTickStep } from './utils.js';
 import { S } from './state.js';
 import { filterEps, filteredInfoEps, makeEpMap, gWindowedSnaps,
          pickBaselineSnap, windowDisplayLabel } from './data.js';
@@ -455,7 +455,7 @@ export function buildEngagementChart() {
   filterEps(last).forEach(e => { aidStats[e.aid] = e; });
 
   const visEps = S.engSortByValue
-    ? eps.slice().sort((a, b) => computeComposite(aidStats[b.aid]) - computeComposite(aidStats[a.aid]))
+    ? eps.slice().sort((a, b) => computeScore(aidStats[b.aid], S.scoreVersion) - computeScore(aidStats[a.aid], S.scoreVersion))
     : eps.slice();
 
   document.getElementById('engage-scope-note').textContent = '';
@@ -463,7 +463,7 @@ export function buildEngagementChart() {
 
   const labels     = visEps.map(ep => shortT(ep.title, 14));
   _engFullTitles   = visEps.map(ep => ep.title);
-  const data       = visEps.map(ep => computeComposite(aidStats[ep.aid]));
+  const data       = visEps.map(ep => computeScore(aidStats[ep.aid], S.scoreVersion));
 
   // 折断轴配置（与播放/互动条形图共用同一套逻辑）
   const brokenCfg   = calcBrokenAxisConfig(data);

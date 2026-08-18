@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "watcher-dev",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["server/serve-static.js", "4607"],
+      "port": 4607
+    }
+  ]
+}

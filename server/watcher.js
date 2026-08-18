@@ -25,9 +25,14 @@
 //                                        sections: [{id, title}, ...],
 //                                        episodes: [{aid,bvid,title,pubdate,section_id}, ...],
 //                                        moves:    [{time,aid,title,from,to}, ...] }
-//   watcher/data/season_<seasonId>.jsonl — pure-facts snapshots, one per cycle (append-only)
+//   watcher/data/season_<seasonId>.jsonl — 热数据：pure-facts snapshots, one per cycle
 //                                      { time, episodes: [{aid, view, danmaku,
 //                                        reply, fav, coin, share, like}, ...] }
+//                                      每周期追加后做保留维护：早于「最新快照-30d」
+//                                      的行滚动移入 archive（见下）。
+//   watcher/data/season_<seasonId>.archive.jsonl — 归档：30d 前的过期快照（只追加）
+//   watcher/data/season_<seasonId>.stats.json — 采集统计（每周期重写）：
+//                                      { snapshot_count, first_time, last_time, jsonl_bytes }
 //   The atomic record is (aid, time) → stats; section is metadata, not repeated per
 //   snapshot. Membership history is preserved losslessly in `moves` (from/to=null ⇒
 //   outside the season). Link key between the two files: aid.

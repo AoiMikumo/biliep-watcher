@@ -1,6 +1,6 @@
 // ── 全局配置 & 魔法数字 ─────────────────────────────────────────────
 // 版本号（同步更新 buildDOM 里的版本徽章与 <title>）
-export const VERSION = '1.4.1';
+export const VERSION = '1.5.0';
 
 // 图表颜色序列
 export const COLORS = [
@@ -40,12 +40,12 @@ export const STAT_DEFS = [
 
 // 增量时间窗口选项
 export const WINDOWS = [
-  { label: '1h',  hours: 1   },
   { label: '4h',  hours: 4   },
   { label: '12h', hours: 12  },
   { label: '1d',  hours: 24  },
   { label: '3d',  hours: 72  },
-  { label: '7d',  hours: 168 }
+  { label: '7d',  hours: 168 },
+  { label: '30d', hours: 720 }
 ];
 
 // 表格列定义

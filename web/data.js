@@ -82,9 +82,14 @@ export function updateWindowNote() {
 // 根据数据跨度启用/禁用各窗口，并自动选中合适的默认项
 export function updateWindowAvailability() {
   if (!S.snapshots.length) return;
-  const lastMs  = parseBeijingTime(S.snapshots[S.snapshots.length - 1].time).getTime();
-  const firstMs = parseBeijingTime(S.snapshots[0].time).getTime();
-  const spanH   = (lastMs - firstMs) / 3600000;
+  // 全历史跨度以 stats.json 为准（按需拉取后本地只有窗口切片，不能用本地首尾算）
+  let spanH;
+  if (S.stats && S.stats.first_time && S.stats.last_time) {
+    spanH = (parseBeijingTime(S.stats.last_time) - parseBeijingTime(S.stats.first_time)) / 3600000;
+  } else {
+    spanH = (parseBeijingTime(S.snapshots[S.snapshots.length - 1].time) -
+             parseBeijingTime(S.snapshots[0].time)) / 3600000;
+  }
   const pills   = document.querySelectorAll('#window-pills .window-pill');
   let hasActive        = false;
   let foundFirstLarger = false;
@@ -124,9 +129,10 @@ export function updateWindowAvailability() {
 }
 
 // ── 数据加载 ─────────────────────────────────────────────────────────
-// 合集为存储单位：直接读两份文件，无需客户端合并。
-//   season_<id>.json  —— 元数据 + 当前小节归属 + moves 变更日志
-//   season_<id>.jsonl —— 纯事实快照 { time, episodes:[{aid, 指标...}] }
+// 合集为存储单位：直接读三份文件，无需客户端合并。
+//   season_<id>.json       —— 元数据 + 当前小节归属 + moves 变更日志
+//   season_<id>.stats.json —— 采集统计（快照总数/首尾时间），驱动头部信息与窗口可用性
+//   season_<id>.jsonl      —— 热数据：服务端已按 30d 滚动归档，客户端全量拉取即可
 // aid→当前小节 由 info.episodes[].section_id 给出（filterEps 据此按当前归属筛选）。
 export function loadData(firstLoad, onInit, onRefresh, onError) {
   const params   = new URLSearchParams(window.location.search);
@@ -144,15 +150,17 @@ export function loadData(firstLoad, onInit, onRefresh, onError) {
       if (!r.ok) throw new Error(`HTTP ${r.status} (season_${seasonId}.json)`);
       return r.json();
     }),
+    fetch(`data/season_${seasonId}.stats.json${bust}`).then(r => r.ok ? r.json() : null).catch(() => null),
     fetch(`data/season_${seasonId}.jsonl${bust}`).then(r => {
       if (!r.ok) throw new Error(`HTTP ${r.status} (season_${seasonId}.jsonl)`);
       return r.text();
     })
-  ]).then(([info, jsonlText]) => {
+  ]).then(([info, stats, jsonlText]) => {
     if (!info || !Array.isArray(info.sections) || !Array.isArray(info.episodes)) {
       throw new Error('合集元数据格式不正确（season_*.json）');
     }
     S.info       = info;
+    S.stats      = stats;
     S.snapshots  = parseJsonl(jsonlText);
     S.aidSection = {};
     info.episodes.forEach(ep => { S.aidSection[ep.aid] = ep.section_id; });

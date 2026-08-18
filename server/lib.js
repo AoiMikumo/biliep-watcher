@@ -184,6 +184,89 @@ function writeBasicJson(filePath, basic) {
 
 function seasonJsonPath(id)  { return dataPath(`season_${id}.json`); }
 function seasonJsonlPath(id) { return dataPath(`season_${id}.jsonl`); }
+function seasonArchivePath(id) { return dataPath(`season_${id}.archive.jsonl`); }
+function seasonStatsPath(id)  { return dataPath(`season_${id}.stats.json`); }
+
+// 热数据保留窗口：最近 30 天（相对最新快照，而非墙钟——老数据/补录时语义一致）。
+const RETENTION_HOURS = 30 * 24;
+
+function parseSnapTime(s) { return new Date(s.replace(' ', 'T') + '+08:00').getTime(); }
+function fmtBeijing(ms) {
+    const d = new Date(ms + 8 * 3600 * 1000);
+    const p = n => String(n).padStart(2, '0');
+    return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ` +
+        `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+}
+function firstLineTime(file) {
+    if (!fs.existsSync(file)) return null;
+    const fd = fs.openSync(file, 'r');
+    const buf = Buffer.alloc(2048);
+    const n = fs.readSync(fd, buf, 0, buf.length, 0);
+    fs.closeSync(fd);
+    try { return JSON.parse(buf.toString('utf8', 0, n).split('\n')[0]).time ?? null; } catch (_) { return null; }
+}
+function lastLineTime(file) {
+    if (!fs.existsSync(file)) return null;
+    const size = fs.statSync(file).size;
+    const fd = fs.openSync(file, 'r');
+    const buf = Buffer.alloc(Math.min(4096, size));
+    fs.readSync(fd, buf, 0, buf.length, Math.max(0, size - buf.length));
+    fs.closeSync(fd);
+    const tail = buf.toString('utf8').trim().split('\n').pop();
+    try { return JSON.parse(tail).time ?? null; } catch (_) { return null; }
+}
+
+// 热数据保留维护：jsonl 首条快照已老于 30d 时，把过期行挪进 archive（append），
+// 热文件重写为窗口内部分。无过期时只读首行 2KB 即返回，代价可忽略。
+// 返回 { moved }；同时只更新 stats.json 的 jsonl_bytes（不增计数）。
+function rotateSeasonRetention(id) {
+    const hot = seasonJsonlPath(id);
+    const first = firstLineTime(hot);
+    const last  = lastLineTime(hot);
+    if (!first || !last) return { moved: 0 };
+    const cutoff = fmtBeijing(parseSnapTime(last) - RETENTION_HOURS * 3600 * 1000);
+    if (first >= cutoff) return { moved: 0 };
+
+    const text  = fs.readFileSync(hot, 'utf8');
+    const lines = text.split('\n');
+    const tailEmpty = lines[lines.length - 1] === '';
+    if (tailEmpty) lines.pop();
+    let split = 0;
+    while (split < lines.length) {
+        const m = /"time":"([^"]+)"/.exec(lines[split]);
+        if (m && m[1] >= cutoff) break;
+        split++;
+    }
+    if (split === 0) return { moved: 0 };
+
+    const moved = lines.slice(0, split);
+    const kept  = lines.slice(split);
+    ensureDataDir();
+    fs.appendFileSync(seasonArchivePath(id), moved.join('\n') + '\n', 'utf8');
+    fs.writeFileSync(hot, kept.join('\n') + '\n', 'utf8');
+
+    const stats = loadJson(seasonStatsPath(id), null);
+    if (stats) {
+        stats.jsonl_bytes = fs.statSync(hot).size;
+        fs.writeFileSync(seasonStatsPath(id), JSON.stringify(stats, null, 2), 'utf8');
+    }
+    return { moved: moved.length };
+}
+
+// 采集统计（快照总数/首尾时间/字节数）：增量更新，前端据它渲染头部信息与窗口可用性，
+// 无需为"已采集 N 次 / 跨度"这类展示下载全量历史。
+function writeSeasonStats(id, time) {
+    const jsonlPath = seasonJsonlPath(id);
+    const prev = loadJson(seasonStatsPath(id), null) ?? {};
+    const firstTime = prev.first_time ?? firstLineTime(jsonlPath) ?? time;
+    ensureDataDir();
+    fs.writeFileSync(seasonStatsPath(id), JSON.stringify({
+        snapshot_count: (prev.snapshot_count ?? 0) + 1,
+        first_time: firstTime,
+        last_time: time,
+        jsonl_bytes: fs.existsSync(jsonlPath) ? fs.statSync(jsonlPath).size : 0,
+    }, null, 2), 'utf8');
+}
 
 // From the per-section extraction, assemble the season-level metadata (current
 // membership) and the pure-facts snapshot for this cycle. An aid belongs to one
@@ -266,6 +349,8 @@ function writeSeason(ugc, sectionData, time) {
         }, null, 2), 'utf8');
     }
     appendJsonl(jsonlPath, facts);
+    writeSeasonStats(ugc.id, time);
+    rotateSeasonRetention(ugc.id);
     return { movesAdded: newMoves.length, metaChanged };
 }
 
@@ -289,6 +374,7 @@ module.exports = {
     loadJson, appendJsonl,
     fetchSeason,
     extractSectionData, writeBasicJson, basicNeedsUpdate,
-    seasonJsonPath, seasonJsonlPath,
+    seasonJsonPath, seasonJsonlPath, seasonArchivePath, seasonStatsPath,
+    rotateSeasonRetention, writeSeasonStats,
     assembleSeason, computeMoves, writeSeason,
 };

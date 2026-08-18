@@ -193,6 +193,7 @@ export function attachTip(el, getTitle) {
 }
 
 // ── 综合评分（纯计算，无任何外部依赖） ───────────────────────────────
+// v1：B 站周刊排行榜原始算法（保留作对照口径）。
 export function computeComposite(s) {
   if (!s || !s.view) return 0;
   const view    = Math.max(0, s.view    || 0);
@@ -209,4 +210,77 @@ export function computeComposite(s) {
     Math.log10(reply + danmaku + 10) / Math.log10(view + fav + coin + 10) * 1000
   ) / 1000);
   return +((view * corrA + reply * corrB * 50 + coin * corrC * 20 + fav * corrC) * corrD).toFixed(0);
+}
+
+// ── 综合评分 v2（lovely-lychee 算法）───────────────────────────────────
+// 评分 = 播放 × 系数；系数 = C1 × C2 × C3 × K，硬截断 [10%, 300%]。
+//   C1 小稿阻尼：各互动率 × 播放/(播放+400)，低播放稿互动影响压缩但不为零。
+//   C2 核心系数：六维乘数之积 (1+率/s)^β，超 cap 后按 cap×(1+ln(率/cap)) 软截尾；
+//                凹曲线使"均衡发展"优于"偏科堆叠"（互相牵制）。
+//   C3 异常修正：单项偏离 ∈ [0.9,1.1]，取 |偏离| 最大两项相乘（可反向抵消）；
+//                低区全为比例阈值（0 自然落最低档），高区 2×cap→2.5×cap 连续曲线；
+//                分档生效：赞≥100，币/藏/评/享≥200，弹≥500。
+export const V2_K = 0.12;
+const V2_DIM = {
+  coin:  { s: 2,   beta: 0.8,  cap: 5 },
+  fav:   { s: 2.5, beta: 0.5,  cap: 5 },
+  like:  { s: 4,   beta: 0.3,  cap: 9 },
+  reply: { s: 1,   beta: 0.35, cap: 3 },
+  dm:    { s: 1.5, beta: 0.35, cap: 5 },
+  share: { s: 2,   beta: 0.3,  cap: 2 },
+};
+const V2_DAMP_V = 400;
+const V2_DM_PRESENT = 1.05;
+const V2_CLIP = [0.1, 3.0];
+const V2_LOW_FLOOR = { like: 100, dm: 500, other: 200 };
+const V2_HIGH_FLOOR = { like: 100, coin: 200, fav: 200, reply: 200, dm: 500, share: 200 };
+const V2_LOW = {
+  like:  r => (r < 1 ? Math.max(0.9, 0.9 + 0.1 * r) : 1),
+  coin:  r => (r < 0.02 ? 0.9 : r < 0.1 ? 0.95 : 1),
+  fav:   r => (r < 0.02 ? 0.95 : r < 0.1 ? 0.975 : 1),
+  reply: r => (r < 0.02 ? 0.9 : r < 0.1 ? 0.95 : 1),
+  share: r => (r < 0.05 ? 0.975 : 1),
+  dm:    r => (r < 0.03 ? 0.9 : 1),
+};
+const V2_HIGH = (r, cap) => Math.min(1.1, Math.max(1, 1 + 0.2 * (r / cap - 2)));
+
+function v2Anomaly(s, count) {
+  const factors = [];
+  for (const [k, p] of Object.entries(V2_DIM)) {
+    const r = count(k);
+    const lowFloor = k === 'like' ? V2_LOW_FLOOR.like : k === 'dm' ? V2_LOW_FLOOR.dm : V2_LOW_FLOOR.other;
+    if (s.view >= lowFloor) {
+      const f = V2_LOW[k](r);
+      if (f < 1) { factors.push(f); continue; }
+    }
+    if (s.view >= (V2_HIGH_FLOOR[k] ?? 200)) {
+      const f = V2_HIGH(r, p.cap);
+      if (f > 1) factors.push(f);
+    }
+  }
+  factors.sort((a, b) => Math.abs(b - 1) - Math.abs(a - 1));
+  return factors.slice(0, 2).reduce((m, f) => m * f, 1);
+}
+
+export function computeCompositeV2(s) {
+  if (!s || !s.view) return 0;
+  const get = k => Math.max(0, (k === 'dm' ? s.danmaku : s[k]) || 0);
+  const damp = s.view / (s.view + V2_DAMP_V);
+  const rate = k => (100 * get(k) / s.view) * damp;
+  const softCap = (r, cap) => (r <= cap ? r : cap * (1 + Math.log(r / cap)));
+  let core = 1;
+  for (const [k, p] of Object.entries(V2_DIM)) {
+    const r = softCap(rate(k), p.cap);
+    let m = (1 + r / p.s) ** p.beta;
+    if (k === 'dm' && r > 0) m *= V2_DM_PRESENT;
+    core *= m;
+  }
+  const c3 = v2Anomaly(s, k => (100 * get(k)) / s.view);
+  const coef = Math.min(V2_CLIP[1], Math.max(V2_CLIP[0], core * c3 * V2_K));
+  return Math.round(s.view * coef);
+}
+
+// 算法分发：'v2'（默认）| 'v1'（周刊原始算法）
+export function computeScore(s, version) {
+  return version === 'v1' ? computeComposite(s) : computeCompositeV2(s);
 }

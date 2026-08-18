@@ -2,7 +2,8 @@
 export const S = {
   // ── 原始数据 ────────────────────────────────────────────────────────
   info:       null,  // season_<id>.json：{ season_id, season_title, sections, episodes, moves }
-  snapshots:  [],    // season_<id>.jsonl：纯事实快照 [{ time, episodes:[{aid, 指标...}] }]
+  stats:      null,  // season_<id>.stats.json：{ snapshot_count, first_time, last_time, jsonl_bytes }
+  snapshots:  [],    // 当前窗口所需的快照切片 [{ time, episodes:[{aid, 指标...}] }]
   aidSection: {},    // aid → 当前小节 id（来自 info.episodes[].section_id，贯穿全部历史的归属）
 
   // ── UI 筛选 / 排序状态 ──────────────────────────────────────────────
@@ -12,6 +13,7 @@ export const S = {
   engSortByValue:   false, // 综合得分图：同上
   multiShowAll:     false, // 趋势对比：是否显示全部视频
   pieShowDelta:     false, // 饼图：false=总计，true=增量
+  scoreVersion:     'v2',  // 综合评分算法：'v2'（lovely-lychee）| 'v1'（周刊）
 
   // ── 表格排序 ─────────────────────────────────────────────────────────
   tableData: [],

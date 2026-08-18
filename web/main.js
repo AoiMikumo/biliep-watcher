@@ -5,7 +5,7 @@ import { buildDOM, showError, showToast,
          updateHeaderMeta, buildStatCards,
          initFilterBar, refreshFilterBar, initWindowSelector,
          initSortToggles, initPieToggle, setupBtns, setupMultiToggle,
-         buildTable } from './ui.js';
+         initScoreNote, buildTable } from './ui.js';
 import { buildTrendChart, buildPieChart, buildBarChart,
          buildEngagementChart, buildMultiChart, buildDeltaChart } from './charts.js';
 
@@ -64,6 +64,7 @@ function _initDashboard() {
     () => { buildBarChart(_activeMetric('bar-btns')); _syncBarEngHeight(); },
     () => { buildEngagementChart(); _syncBarEngHeight(); }
   );
+  initScoreNote();
   _buildAllCharts();
   buildTable();
   document.getElementById('loading-screen').style.display = 'none';
