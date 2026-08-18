@@ -1,6 +1,6 @@
 'use strict';
-// watcher/watcher.js — long-running tracker that samples Bilibili season data
-// at fixed clock-aligned intervals and records per-section JSONL snapshots.
+// server/watcher.js — long-running tracker that samples Bilibili season data
+// at fixed clock-aligned intervals and records season-level JSONL snapshots.
 //
 // Configuration (edit below):
 //   INTERVAL_MIN  — sampling interval in minutes; MUST be a divisor of 60
@@ -12,32 +12,31 @@
 //   [
 //     {
 //       "season_id":   8019898,
-//       "section_ids": [8911254],   // [] means all sections of the season
 //       "aids":        [116496122514414]  // at least one; tried in order
 //     }
 //   ]
+// Multiple entries with the same season_id are merged: aids are deduplicated in
+// order. Each configured season is always collected as a whole season.
 //
 // Output (合集 is the storage unit; the frontend monitors a season by ?seasonid=<id>):
-//   watcher/data/season_<seasonId>.json  — metadata + current membership + moves log
+//   web/data/season_<seasonId>.json  — metadata + current membership + moves log
 //                                      (rewritten only when title / section list /
 //                                       episode set / membership changes)
 //                                      { season_id, season_title, update_time,
 //                                        sections: [{id, title}, ...],
 //                                        episodes: [{aid,bvid,title,pubdate,section_id}, ...],
 //                                        moves:    [{time,aid,title,from,to}, ...] }
-//   watcher/data/season_<seasonId>.jsonl — 热数据：pure-facts snapshots, one per cycle
+//   web/data/season_<seasonId>.jsonl — 热数据：pure-facts snapshots, one per cycle
 //                                      { time, episodes: [{aid, view, danmaku,
 //                                        reply, fav, coin, share, like}, ...] }
 //                                      每周期追加后做保留维护：早于「最新快照-30d」
 //                                      的行滚动移入 archive（见下）。
-//   watcher/data/season_<seasonId>.archive.jsonl — 归档：30d 前的过期快照（只追加）
-//   watcher/data/season_<seasonId>.stats.json — 采集统计（每周期重写）：
+//   web/data/season_<seasonId>.archive.jsonl — 归档：30d 前的过期快照（只追加）
+//   web/data/season_<seasonId>.stats.json — 采集统计（每周期重写）：
 //                                      { snapshot_count, first_time, last_time, jsonl_bytes }
 //   The atomic record is (aid, time) → stats; section is metadata, not repeated per
 //   snapshot. Membership history is preserved losslessly in `moves` (from/to=null ⇒
 //   outside the season). Link key between the two files: aid.
-//   Existing per-section files (<sectionId>.json/.jsonl) are converted once by
-//   migrate.js and then kept only as a cold archive.
 
 const path = require('path');
 const lib  = require('./lib.js');
@@ -73,46 +72,72 @@ function loadList() {
     return list;
 }
 
+function mergeListEntries(list) {
+    const bySeasonId = new Map();
+
+    for (const entry of list) {
+        const sid = Number(entry && entry.season_id);
+        if (!Number.isSafeInteger(sid) || sid <= 0 || !Array.isArray(entry.aids) || entry.aids.length === 0) {
+            console.warn(`[watcher] Skipping invalid entry: ${JSON.stringify(entry)}`);
+            continue;
+        }
+
+        let target = bySeasonId.get(sid);
+        if (!target) {
+            target = {
+                season_id: sid,
+                aids: [],
+            };
+            bySeasonId.set(sid, target);
+        }
+
+        for (const aid of entry.aids) {
+            const normalizedAid = Number(aid);
+            if (Number.isSafeInteger(normalizedAid) && normalizedAid > 0 && !target.aids.includes(normalizedAid)) {
+                target.aids.push(normalizedAid);
+            }
+        }
+    }
+
+    return Array.from(bySeasonId.values())
+        .filter(entry => {
+            if (entry.aids.length > 0) return true;
+            console.warn(`[watcher] Skipping season=${entry.season_id}: no valid aids.`);
+            return false;
+        })
+        .map(entry => ({
+            season_id: entry.season_id,
+            aids: entry.aids,
+        }));
+}
+
 // ── One sampling cycle ────────────────────────────────────────────────────────
 
 async function runCycle() {
     const time    = lib.nowTime();
-    const list    = loadList();
+    const list    = mergeListEntries(loadList());
     if (!list.length) return;
-
-    // Group targets by season_id so a single API call covers all requested
-    // sections of the same season.
-    const bySeasonId = {};
-    for (const entry of list) {
-        const sid = entry.season_id;
-        if (!sid || !Array.isArray(entry.aids) || entry.aids.length === 0) {
-            console.warn(`[watcher] Skipping invalid entry: ${JSON.stringify(entry)}`);
-            continue;
-        }
-        bySeasonId[sid] = entry;
-    }
 
     let totalSeasons  = 0;
     let totalEpisodes = 0;
     const skipped     = [];
     const written     = [];
 
-    for (const [, entry] of Object.entries(bySeasonId)) {
-        const { season_id, section_ids, aids } = entry;
+    for (const entry of list) {
+        const { season_id, aids } = entry;
         let data;
         try {
-            data = await lib.fetchSeason(aids);
+            data = await lib.fetchSeason(aids, season_id);
         } catch (e) {
             skipped.push(`season=${season_id} (all aids failed: ${e.message})`);
             continue;
         }
 
         const ugc = data.ugc_season;
-        // section_ids omitted / [] ⇒ track all sections of the season (合集为单位)
-        const sectionData = lib.extractSectionData(ugc, section_ids ?? [], time);
+        const sectionData = lib.extractSectionData(ugc, time);
 
         if (sectionData.length === 0) {
-            skipped.push(`season=${season_id} (no matching sections found)`);
+            skipped.push(`season=${season_id} (no sections found)`);
             continue;
         }
 
@@ -139,7 +164,7 @@ async function runCycle() {
 
 // ── Scheduler ─────────────────────────────────────────────────────────────────
 
-(async () => {
+async function main() {
     if (60 % INTERVAL_MIN !== 0) {
         console.error(`[watcher] INTERVAL_MIN=${INTERVAL_MIN} is not a divisor of 60. Aborting.`);
         process.exit(1);
@@ -166,4 +191,16 @@ async function runCycle() {
     }
 
     await tick();
-})();
+}
+
+if (require.main === module) {
+    main();
+}
+
+module.exports = {
+    msUntilNextTick,
+    loadList,
+    mergeListEntries,
+    runCycle,
+    main,
+};

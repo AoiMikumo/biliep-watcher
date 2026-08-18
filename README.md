@@ -99,7 +99,7 @@ biliep-watcher/
 >   | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const u=JSON.parse(s).data;console.log("season_id =",u.ugc_season.id,"| aid =",u.aid)})'
 > ```
 
-`server/list.json` 每个采集周期都会被重新读取，**增删合集无需重启**采集器。
+`server/list.json` 每个采集周期都会被重新读取，**增删合集无需重启**采集器。采集器始终采集目标合集的全部小节数据；如果同一个 `season_id` 写了多条配置，会把这些条目的 `aids` 按顺序去重合并。接口返回的合集 id 必须与配置的 `season_id` 一致，否则本轮会跳过该配置，避免把数据写到错误合集文件。
 
 ### 2) 启动采集器
 
@@ -190,7 +190,7 @@ location /bili/ {
 
 `snapshot_count`/`first_time` 覆盖归档在内的完整采集历史，用于看板头部的快照数与跨度展示、增量窗口可用性判断，避免为展示这些信息下载全量历史。
 
-**约定**：时间统一北京时间（UTC+8）；日期 `yyyy-mm-dd`，时间戳 `yyyy-mm-dd hh:mm:ss`；JSON 4 空格缩进、UTF-8 无 BOM。
+**约定**：时间统一北京时间（UTC+8）；日期 `yyyy-mm-dd`，时间戳 `yyyy-mm-dd hh:mm:ss`；JSON 元数据文件使用 2 空格缩进，JSONL 快照每行紧凑输出，UTF-8 无 BOM。
 
 ---
 

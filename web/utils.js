@@ -4,7 +4,6 @@ import { BREAK_RATIO, OUTLIER_PCT } from './config.js';
 // ── 数字格式化 ───────────────────────────────────────────────────────
 export const fmt     = n => n >= 10000 ? (n / 10000).toFixed(1) + '万' : n.toLocaleString('zh-CN');
 export const fmtFull = n => n.toLocaleString('zh-CN');
-export const fmtPct  = n => n.toFixed(2) + '%';
 
 // 图表轴刻度专用：fmt 在 ≥10000 时固定保留 1 位小数（"1.0万"），
 // 在以下两种情况下会失去意义，需退回到逗号分隔的完整数字：
@@ -44,8 +43,6 @@ export function fmtTimeLabel(s) {
 // ── 字符串工具 ───────────────────────────────────────────────────────
 // 截断标题到 max 个字符（超出加省略号）
 export const shortT = (t, max = 13) => t.length > max ? t.substring(0, max - 1) + '…' : t;
-// HTML 实体转义（防止 XSS）
-export const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 // Hex 颜色 → rgba(...)
 export function hexToRgba(hex, alpha) {
   const r = parseInt(hex.slice(1, 3), 16);
