@@ -7,7 +7,7 @@ export const S = {
   aidSection: {},    // aid → 当前小节 id（来自 info.episodes[].section_id，贯穿全部历史的归属）
 
   // ── UI 筛选 / 排序状态 ──────────────────────────────────────────────
-  deltaWindowHours: 24,    // 当前增量时间窗口（小时）
+  deltaWindowHours: 72,    // 当前增量时间窗口（小时），默认 3d
   selectedSections: null,  // Set<sectionId>，null 表示全选
   barSortByValue:   false, // 条形图：true=按指标值降序，false=按列表顺序
   engSortByValue:   false, // 综合得分图：同上

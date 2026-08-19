@@ -29,6 +29,8 @@
 //   web/data/season_<seasonId>.jsonl — 热数据：pure-facts snapshots, one per cycle
 //                                      { time, episodes: [{aid, view, danmaku,
 //                                        reply, fav, coin, share, like}, ...] }
+//                                      每个对齐槽位（INTERVAL_MIN 的整数倍）至多
+//                                      一条快照，同槽位的重复触发会被去重跳过。
 //                                      每周期追加后做保留维护：早于「最新快照-30d」
 //                                      的行滚动移入 archive（见下）。
 //   web/data/season_<seasonId>.archive.jsonl — 归档：30d 前的过期快照（只追加）
@@ -48,19 +50,22 @@ const LIST_FILE    = path.join(lib.ROOT, 'list.json');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+const INTERVAL_MS = INTERVAL_MIN * 60 * 1000;
+
+// Wall-clock position within the current 10-min-style slot: ms since the last
+// aligned tick and ms until the next one. All scheduling decisions are derived
+// from the wall clock at wake time — never trusted to the monotonic timer that
+// woke us — so a stepped system clock can't trick us into sampling off-slot.
+function tickPhase() {
+    const now     = new Date();
+    const sinceMs = ((now.getMinutes() % INTERVAL_MIN) * 60 + now.getSeconds()) * 1000
+        + now.getMilliseconds();
+    return { sinceMs, untilMs: INTERVAL_MS - sinceMs };
+}
+
 // Returns the milliseconds until the next clock-aligned sample tick.
 function msUntilNextTick() {
-    const now      = new Date();
-    const minOfHr  = now.getMinutes();
-    const secOfMin = now.getSeconds();
-    const msOfSec  = now.getMilliseconds();
-
-    // Minutes past the last tick within this hour
-    const minPastTick  = minOfHr % INTERVAL_MIN;
-    // Full ms elapsed since the last tick
-    const msSinceTick  = (minPastTick * 60 + secOfMin) * 1000 + msOfSec;
-    const intervalMs   = INTERVAL_MIN * 60 * 1000;
-    return intervalMs - msSinceTick;
+    return tickPhase().untilMs;
 }
 
 function loadList() {
@@ -143,12 +148,15 @@ async function runCycle() {
 
         // One season = one set of files: season_<id>.json (metadata + moves) and
         // season_<id>.jsonl (pure facts, appended every cycle).
-        const { movesAdded } = lib.writeSeason(ugc, sectionData, time);
+        // INTERVAL_MIN enables slot dedup: a second write landing in the same
+        // aligned slot as the last snapshot is skipped (see lib.writeSeason).
+        const { movesAdded, snapSkipped } = lib.writeSeason(ugc, sectionData, time, INTERVAL_MIN);
         const epCount = new Set(sectionData.flatMap(s => s.snapshot.episodes.map(e => e.aid))).size;
         totalSeasons++;
         totalEpisodes += epCount;
         written.push(`season=${ugc.id}(${ugc.title}) ep=${epCount}` +
-            (movesAdded ? ` moves+${movesAdded}` : ''));
+            (movesAdded ? ` moves+${movesAdded}` : '') +
+            (snapSkipped ? ' snapshot-skip(dup-slot)' : ''));
 
         // Brief pause between seasons to avoid hammering the API.
         await lib.sleep(1500 + Math.floor(Math.random() * 1000));
@@ -164,6 +172,15 @@ async function runCycle() {
 
 // ── Scheduler ─────────────────────────────────────────────────────────────────
 
+// Alignment guard tolerances. Node's setTimeout runs on a monotonic clock while
+// timestamps and slot alignment use the wall clock. If the wall clock is stepped
+// backward after a timer was set (W32Time/NTP step correction, VM time sync,
+// sleep-wake quirks), that timer fires "early" in wall time — which used to
+// produce an off-slot snapshot (e.g. 09:57) followed by a second one at the
+// real tick (10:00). The guard below revalidates alignment at every wake.
+const EARLY_TOL_MS = 2_000;   // ≤2s before the tick: sleep out the remainder, then sample
+const LATE_TOL_MS  = 30_000;  // ≤30s after the tick: normal scheduling jitter, sample now
+
 async function main() {
     if (60 % INTERVAL_MIN !== 0) {
         console.error(`[watcher] INTERVAL_MIN=${INTERVAL_MIN} is not a divisor of 60. Aborting.`);
@@ -177,9 +194,27 @@ async function main() {
         `First sample in ${waitMin}m${waitSec}s (next clock tick).`);
 
     // Wait for the first aligned tick, then enter the regular interval loop.
+    // tick() revalidates alignment on entry, so an early wake here is safe too.
     await lib.sleep(waitMs);
 
     async function tick() {
+        // Never sample before the tick: if we woke early (timer jitter, or the
+        // wall clock lagging behind the monotonic timer that fired us), sleep
+        // out the remainder and re-check. Landing a second or two late is
+        // acceptable; a second early is not.
+        for (;;) {
+            const { sinceMs, untilMs } = tickPhase();
+            if (sinceMs <= LATE_TOL_MS) break;   // at or just past the tick
+            if (untilMs > EARLY_TOL_MS) {
+                // Woke mid-slot: the wall clock must have stepped since this
+                // timer was set. Don't sample off-slot — realign to the tick.
+                console.warn(`[watcher] Woke ${Math.round(sinceMs / 1000)}s past the tick ` +
+                    `(off-slot; clock stepped?) — realigning without sampling.`);
+                setTimeout(tick, untilMs);
+                return;
+            }
+            await lib.sleep(untilMs + 25);
+        }
         try {
             await runCycle();
         } catch (e) {
@@ -198,6 +233,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+    tickPhase,
     msUntilNextTick,
     loadList,
     mergeListEntries,

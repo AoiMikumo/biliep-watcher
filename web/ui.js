@@ -1,6 +1,6 @@
 // ── UI 层：DOM 构建 + 页面组件 ──────────────────────────────────────
 import { VERSION, STAT_DEFS, TABLE_COLS, WINDOWS, MANY_EP, MULTI_DEF, ML, METRIC_ICONS } from './config.js';
-import { fmt, fmtFull, fmtDate, shortT, attachTip, parseBeijingTime, computeScore } from './utils.js';
+import { fmt, fmtFull, fmtPrecise, fmtDate, shortT, attachTip, parseBeijingTime, computeScore } from './utils.js';
 import { S } from './state.js';
 import { filterEps, filteredInfoEps, pickBaselineSnap,
          updateWindowNote, updateWindowAvailability } from './data.js';
@@ -440,7 +440,7 @@ function renderRows() {
     if (row.composite > 0) {
       const badge = document.createElement('span');
       badge.className = 'badge badge-info';
-      badge.textContent = fmt(row.composite);
+      badge.textContent = fmtPrecise(row.composite);
       tdComposite.appendChild(badge);
     } else {
       tdComposite.style.color = '#cbd5e1';
@@ -453,10 +453,10 @@ function renderRows() {
     const growthBadge = document.createElement('span');
     if (row.viewGrowth > 0) {
       growthBadge.className = 'badge badge-up';
-      growthBadge.textContent = fmt(row.viewGrowth);
+      growthBadge.textContent = fmtPrecise(row.viewGrowth);
     } else if (row.viewGrowth < 0) {
       growthBadge.className = 'badge badge-down';
-      growthBadge.textContent = '-' + fmt(Math.abs(row.viewGrowth));
+      growthBadge.textContent = '-' + fmtPrecise(Math.abs(row.viewGrowth));
     } else {
       growthBadge.className = 'badge badge-zero';
       growthBadge.textContent = '—';

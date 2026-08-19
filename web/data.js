@@ -112,17 +112,17 @@ export function updateWindowAvailability() {
 
   if (!hasActive) {
     const savedHours = +localStorage.getItem('bv_delta_window') || 0;
-    let savedBtn = null, prefer1d = null, best = null;
+    let savedBtn = null, prefer3d = null, best = null;
     pills.forEach((btn, i) => {
       if (!btn.disabled) { best = btn; }
       if (WINDOWS[i].hours === savedHours && !btn.disabled) savedBtn = btn;
-      if (WINDOWS[i].hours === 24 && !btn.disabled) prefer1d = btn;
+      if (WINDOWS[i].hours === 72 && !btn.disabled) prefer3d = btn;
     });
     if (best) {
-      const chosen = savedBtn || prefer1d || best;
+      const chosen = savedBtn || prefer3d || best;
       chosen.classList.add('active');
       const idx = Array.prototype.indexOf.call(pills, chosen);
-      S.deltaWindowHours = WINDOWS[idx] ? WINDOWS[idx].hours : 24;
+      S.deltaWindowHours = WINDOWS[idx] ? WINDOWS[idx].hours : 72;
     }
   }
   updateWindowNote();

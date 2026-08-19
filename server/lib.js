@@ -322,11 +322,21 @@ function episodesKey(eps) {
     return (eps ?? []).map(e => `${e.aid}:${e.section_id}:${e.title}`).join('|');
 }
 
+// 槽位去重键：把快照时间归并到 slotMin 分钟的对齐槽位。
+// 槽位边界按 UTC 毫秒向下取整即可：北京时间偏移是整小时，整除 60 的
+// 槽位在两种时区下边界一致。
+function slotKey(timeStr, slotMin) {
+    return Math.floor(parseSnapTime(timeStr) / (slotMin * 60000));
+}
+
 // Write the season metadata json (rewritten only when title / section list /
 // episode set / membership changed, appending any new moves) and append one
 // pure-facts line to the season jsonl every cycle.
-// Returns { movesAdded, metaChanged }.
-function writeSeason(ugc, sectionData, time) {
+// slotMin > 0 时启用槽位去重：热文件最后一条快照已与本次 time 同槽位时，
+// 跳过追加与 stats 计数（元数据/moves 仍照常更新）——防止时钟回拨后定时器
+// 重触发、或并行跑了第二个实例时在同一槽位写入第二条。
+// Returns { movesAdded, metaChanged, snapSkipped }.
+function writeSeason(ugc, sectionData, time, slotMin = 0) {
     const { meta, facts } = assembleSeason(ugc, sectionData, time);
     const jsonPath  = seasonJsonPath(ugc.id);
     const jsonlPath = seasonJsonlPath(ugc.id);
@@ -352,10 +362,16 @@ function writeSeason(ugc, sectionData, time) {
             moves:        prevMoves.concat(newMoves),
         }, null, 2), 'utf8');
     }
+    if (slotMin > 0) {
+        const lastT = lastLineTime(jsonlPath);
+        if (lastT && slotKey(lastT, slotMin) === slotKey(time, slotMin)) {
+            return { movesAdded: newMoves.length, metaChanged, snapSkipped: true };
+        }
+    }
     appendJsonl(jsonlPath, facts);
     writeSeasonStats(ugc.id, time);
     rotateSeasonRetention(ugc.id);
-    return { movesAdded: newMoves.length, metaChanged };
+    return { movesAdded: newMoves.length, metaChanged, snapSkipped: false };
 }
 
 module.exports = {
