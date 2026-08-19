@@ -212,12 +212,12 @@ export function computeComposite(s) {
 // ── 综合评分 v2（lovely-lychee 算法）───────────────────────────────────
 // 评分 = 播放 × 系数；系数 = C1 × C2 × C3 × K，硬截断 [10%, 300%]。
 //   C1 小稿阻尼：各互动率 × 播放/(播放+400)，低播放稿互动影响压缩但不为零。
-//   C2 核心系数：六维乘数之积 (1+率/s)^β，超 cap 后按 cap×(1+ln(率/cap)) 软截尾；
+//   C2 核心系数：六维乘数之积 (1+率/s)^β，超 cap 后按 cap×(1+0.5·ln(率/cap)) 软截尾；
 //                凹曲线使"均衡发展"优于"偏科堆叠"（互相牵制）。
 //   C3 异常修正：单项偏离 ∈ [0.9,1.1]，取 |偏离| 最大两项相乘（可反向抵消）；
-//                低区全为比例阈值（0 自然落最低档），高区 2×cap→2.5×cap 连续曲线；
+//                低区为线性缓坡，高区 2×cap→3×cap 连续曲线；
 //                分档生效：赞≥100，币/藏/评/享≥200，弹≥500。
-export const V2_K = 0.12;
+export const V2_K = 0.125;
 const V2_DIM = {
   coin:  { s: 2,   beta: 0.8,  cap: 5 },
   fav:   { s: 2.5, beta: 0.5,  cap: 5 },
@@ -231,15 +231,19 @@ const V2_DM_PRESENT = 1.05;
 const V2_CLIP = [0.1, 3.0];
 const V2_LOW_FLOOR = { like: 100, dm: 500, other: 200 };
 const V2_HIGH_FLOOR = { like: 100, coin: 200, fav: 200, reply: 200, dm: 500, share: 200 };
+// 低区线性缓坡：loR 以下吃满 lo，hiR 以上免罚，区间内按率线性过渡；
+// 播放×(a+c·率) 对播放与计数都单调，率随播放摊薄过界时不产生跳变或倒挂。
 const V2_LOW = {
-  like:  r => (r < 1 ? Math.max(0.9, 0.9 + 0.1 * r) : 1),
-  coin:  r => (r < 0.02 ? 0.9 : r < 0.1 ? 0.95 : 1),
-  fav:   r => (r < 0.02 ? 0.95 : r < 0.1 ? 0.975 : 1),
-  reply: r => (r < 0.02 ? 0.9 : r < 0.1 ? 0.95 : 1),
-  share: r => (r < 0.05 ? 0.975 : 1),
-  dm:    r => (r < 0.03 ? 0.9 : 1),
+  like:  { lo: 0.9, loR: 0.2,  hiR: 1    },
+  coin:  { lo: 0.9, loR: 0.02, hiR: 0.1  },
+  fav:   { lo: 0.9, loR: 0.02, hiR: 0.1  },
+  reply: { lo: 0.9, loR: 0.02, hiR: 0.1  },
+  share: { lo: 0.9, loR: 0,    hiR: 0.05 },
+  dm:    { lo: 0.9, loR: 0,    hiR: 0.03 },
 };
-const V2_HIGH = (r, cap) => Math.min(1.1, Math.max(1, 1 + 0.2 * (r / cap - 2)));
+const V2_LOW_FACTOR = (r, p) =>
+  Math.min(1, Math.max(p.lo, p.lo + (r - p.loR) / (p.hiR - p.loR) * (1 - p.lo)));
+const V2_HIGH = (r, cap) => Math.min(1.1, Math.max(1, 1 + 0.1 * (r / cap - 2)));
 
 function v2Anomaly(s, count) {
   const factors = [];
@@ -247,7 +251,7 @@ function v2Anomaly(s, count) {
     const r = count(k);
     const lowFloor = k === 'like' ? V2_LOW_FLOOR.like : k === 'dm' ? V2_LOW_FLOOR.dm : V2_LOW_FLOOR.other;
     if (s.view >= lowFloor) {
-      const f = V2_LOW[k](r);
+      const f = V2_LOW_FACTOR(r, V2_LOW[k]);
       if (f < 1) { factors.push(f); continue; }
     }
     if (s.view >= (V2_HIGH_FLOOR[k] ?? 200)) {
@@ -264,7 +268,8 @@ export function computeCompositeV2(s) {
   const get = k => Math.max(0, (k === 'dm' ? s.danmaku : s[k]) || 0);
   const damp = s.view / (s.view + V2_DAMP_V);
   const rate = k => (100 * get(k) / s.view) * damp;
-  const softCap = (r, cap) => (r <= cap ? r : cap * (1 + Math.log(r / cap)));
+  // 超 cap 后减速：cap×(1+0.5·ln(率/cap))，2cap 已比较平缓、3cap 非常平缓
+  const softCap = (r, cap) => (r <= cap ? r : cap * (1 + 0.5 * Math.log(r / cap)));
   let core = 1;
   for (const [k, p] of Object.entries(V2_DIM)) {
     const r = softCap(rate(k), p.cap);

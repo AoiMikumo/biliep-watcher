@@ -239,15 +239,33 @@ function rotateSeasonRetention(id) {
     return { moved: moved.length };
 }
 
-// 采集统计（快照总数/首尾时间/字节数）：增量更新，前端据它渲染头部信息与窗口可用性，
-// 无需为"已采集 N 次 / 跨度"这类展示下载全量历史。
+function countJsonlLines(file) {
+    if (!fs.existsSync(file)) return 0;
+    const text = fs.readFileSync(file, 'utf8');
+    let n = 0;
+    for (let i = 0; i < text.length; i++) if (text[i] === '\n') n++;
+    return n;
+}
+
+// 采集统计（快照总数/首尾时间/字节数）：常规每周期 +1；stats.json 缺失时（升级/重建）
+// 从热文件 + 归档文件的真实行数播种，first_time 依次取归档/热文件的首行时间。
+// 前端据它渲染头部信息与窗口可用性，无需为"已采集 N 次 / 跨度"下载全量历史。
 function writeSeasonStats(id, time) {
     const jsonlPath = seasonJsonlPath(id);
-    const prev = loadJson(seasonStatsPath(id), null) ?? {};
-    const firstTime = prev.first_time ?? firstLineTime(jsonlPath) ?? time;
+    const prev = loadJson(seasonStatsPath(id), null);
+    let count, firstTime;
+    if (prev && prev.snapshot_count != null) {
+        count = prev.snapshot_count + 1;
+        firstTime = prev.first_time;
+    } else {
+        // 本周期快照已先行追加，行数即累计采集次数
+        count = countJsonlLines(jsonlPath) + countJsonlLines(seasonArchivePath(id));
+        if (count === 0) count = 1;
+        firstTime = firstLineTime(seasonArchivePath(id)) ?? firstLineTime(jsonlPath) ?? time;
+    }
     ensureDataDir();
     fs.writeFileSync(seasonStatsPath(id), JSON.stringify({
-        snapshot_count: (prev.snapshot_count ?? 0) + 1,
+        snapshot_count: count,
         first_time: firstTime,
         last_time: time,
         jsonl_bytes: fs.existsSync(jsonlPath) ? fs.statSync(jsonlPath).size : 0,
