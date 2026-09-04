@@ -1,6 +1,6 @@
 // ── 数据访问层：加载、过滤、时间窗口逻辑 ───────────────────────────
 import { WINDOWS } from './config.js';
-import { parseBeijingTime, parseJsonl } from './utils.js';
+import { parseBeijingTime, parseJsonl, normalizeSnapTimes } from './utils.js';
 import { S } from './state.js';
 
 // ── 快照过滤（按选中的小节）─────────────────────────────────────────
@@ -161,7 +161,8 @@ export function loadData(firstLoad, onInit, onRefresh, onError) {
     }
     S.info       = info;
     S.stats      = stats;
-    S.snapshots  = parseJsonl(jsonlText);
+    // 分钟归一化：合并同分钟的重复快照，秒级写入抖动归入槽位
+    S.snapshots  = normalizeSnapTimes(parseJsonl(jsonlText));
     S.aidSection = {};
     info.episodes.forEach(ep => { S.aidSection[ep.aid] = ep.section_id; });
     if (!S.snapshots.length) throw new Error('暂无采样数据（season .jsonl 为空）');

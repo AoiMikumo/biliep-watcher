@@ -1,6 +1,6 @@
 // ── 图表层：所有 Chart.js 图表构建函数 ─────────────────────────────
 import { COLORS, MANY_EP, PIE_MAX, MULTI_DEF, getDownsampleMax, ML } from './config.js';
-import { fmt, fmtFull, fmtAxis, shortT, hexToRgba, fmtTimeLabel, downsample, showTip, hideTip, attachTip, computeComposite, computeScore, calcLogAxisBounds, isNeatLogTick, calcBrokenAxisConfig, remapToBrokenAxis, inverseFromBrokenAxis, niceTickStep } from './utils.js';
+import { fmt, fmtFull, fmtAxis, shortT, hexToRgba, fmtMsLabel, parseBeijingTime, downsample, showTip, hideTip, attachTip, computeComposite, computeScore, calcLogAxisBounds, isNeatLogTick, calcBrokenAxisConfig, remapToBrokenAxis, inverseFromBrokenAxis, niceTickStep, inferIntervalMs, findGapRanges } from './utils.js';
 import { S } from './state.js';
 import { filterEps, filteredInfoEps, makeEpMap, gWindowedSnaps,
          pickBaselineSnap, windowDisplayLabel } from './data.js';
@@ -199,6 +199,24 @@ function drawClipMarker(ctx, x, y, dir, color, label, chartArea) {
 // ── 综合得分算法（已移至 utils.js） ──────────────────────────────────
 export { computeComposite } from './utils.js';
 
+// ── 时间序列图表共用：线性时间轴与空窗虚线 ───────────────────────────
+// X 轴是真实线性时间（type:'linear'，x 为毫秒时间戳），不是等间隔类目轴：
+// 采集空窗在轴上占据真实宽度。线段两端都是真实快照时间，跨过空窗 ⟺
+// 空窗区间被完整包含在线段 x 范围内。
+const _segOnGap = (gaps, ctx) => {
+  const x0 = ctx.p0.parsed.x, x1 = ctx.p1.parsed.x;
+  return gaps.some(([a, b]) => x0 <= a && x1 >= b);
+};
+// 线性时间轴刻度配置（标签 "MM-DD HH:mm"）。min/max 固定为数据范围：
+// 毫秒是 1.7e12 量级的大数，Chart.js 自动生成"整齐"刻度步长时会把轴两端
+// 对齐到步长倍数，在数据范围外留出大片空白边距。
+const _timeScaleX = (maxTicks, min, max) => ({
+  type: 'linear', min, max, grid: { display: false },
+  ticks: { maxTicksLimit: maxTicks, color: '#94a3b8', callback: v => fmtMsLabel(v) }
+});
+// tooltip 标题：显示该点的实际时间
+const _timeTooltipTitle = items => items.length ? fmtMsLabel(items[0].parsed.x) : '';
+
 // ── 饼图悬停同步 ─────────────────────────────────────────────────────
 export function syncPieHover(idx) {
   const ch = S.charts.pie;
@@ -211,29 +229,41 @@ export function syncPieHover(idx) {
   });
 }
 // ── 总量趋势折线图 ────────────────────────────────────────────────────
+// 线性时间轴 + 空窗虚线：累计量是单调计数，跨空窗的线性插值在真实时间
+// 距离下有可信度，但用虚线和减淡明确标示"其间无观测"。
 export function buildTrendChart(metric) {
-  const snaps  = downsample(gWindowedSnaps(), getDownsampleMax());
-  const labels = snaps.map(s => fmtTimeLabel(s.time));
-  const data   = snaps.map(s => filterEps(s).reduce((sum, e) => sum + (e[metric] || 0), 0));
-  const label  = ML[metric] || metric;
+  const windowed = gWindowedSnaps();
+  const gaps     = findGapRanges(windowed);
+  const snaps    = downsample(windowed, getDownsampleMax());
+  const xs       = snaps.map(s => parseBeijingTime(s.time).getTime());
+  const data     = snaps.map((s, i) => ({ x: xs[i], y: filterEps(s).reduce((sum, e) => sum + (e[metric] || 0), 0) }));
+  const label    = ML[metric] || metric;
   if (S.charts.trend) S.charts.trend.destroy();
   S.charts.trend = new Chart(getCtx('trend', 'chart-trend'), {
     type: 'line',
-    data: { labels, datasets: [{
+    data: { datasets: [{
       label, data,
       borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.08)',
       borderWidth: 2.5, fill: true, tension: 0.35,
-      pointRadius: 0, pointHoverRadius: 5
+      pointRadius: 0, pointHoverRadius: 5,
+      segment: {
+        borderDash:      ctx => _segOnGap(gaps, ctx) ? [6, 4] : undefined,
+        borderColor:     ctx => _segOnGap(gaps, ctx) ? 'rgba(59,130,246,0.45)' : undefined,
+        backgroundColor: ctx => _segOnGap(gaps, ctx) ? 'transparent' : undefined
+      }
     }]},
     options: {
       responsive: true, maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
       plugins: {
         legend: { display: false },
-        tooltip: { callbacks: { label: c => ` ${label}：${fmtFull(c.raw)}` } }
+        tooltip: { callbacks: {
+          title: _timeTooltipTitle,
+          label: c => ` ${label}：${fmtFull(c.parsed.y)}`
+        } }
       },
       scales: {
-        x: { grid: { display: false }, ticks: { maxTicksLimit: 8, color: '#94a3b8' } },
+        x: _timeScaleX(8, xs[0], xs[xs.length - 1]),
         y: { grid: { color: '#f1f5f9' }, ticks: { color: '#94a3b8', callback: fmtAxis } }
       }
     }
@@ -559,12 +589,14 @@ export function buildMultiChart(metric) {
     noticeEl.appendChild(div);
   }
 
-  const snapsDS      = downsample(gWindowedSnaps(), getDownsampleMax());
-  const chartLabels  = snapsDS.map(s => fmtTimeLabel(s.time));
+  const windowed       = gWindowedSnaps();
+  const gaps           = findGapRanges(windowed);
+  const snapsDS        = downsample(windowed, getDownsampleMax());
+  const xs             = snapsDS.map(s => parseBeijingTime(s.time).getTime());
   // 每条 dataset 同时维护：
   //   _realData  ：真实值（null=视频在该快照尚未存在，其余为真值）
   //   _isSynthetic[i]：标记该索引是不是我们"在首次出现前一个时间点补的 0"
-  // 渲染用的 data 由 bounds 算出后再回填。
+  // 渲染用的 data（{x, y} 点）由 bounds 算出后再回填。
   const datasets = visEps.map((ep, i) => {
     const realData = snapsDS.map(s => {
       const found = s.episodes.find(e => e.aid === ep.aid);
@@ -585,7 +617,9 @@ export function buildMultiChart(metric) {
       backgroundColor: 'transparent',
       borderWidth: 1.5,
       pointRadius: 0, pointHoverRadius: 5,
-      tension: 0.3, spanGaps: true
+      tension: 0.3, spanGaps: true,
+      // 跨采集空窗的线段（含 spanGaps 桥接产生的）降级为虚线
+      segment: { borderDash: ctx => _segOnGap(gaps, ctx) ? [4, 3] : undefined }
     };
   });
   _multiFullTitles = visEps.map(ep => ep.title);
@@ -605,17 +639,18 @@ export function buildMultiChart(metric) {
   const yMax   = bounds.max;
   const yType  = useLog ? 'logarithmic' : 'linear';
 
-  // 生成绘制数据：仅在对数模式下才钳裁；合成 0 在线性下保留为 0，在对数下放到 yMin
+  // 生成绘制数据（{x, y} 点）：仅在对数模式下才钳裁；合成 0 在线性下保留为 0，在对数下放到 yMin
   datasets.forEach(ds => {
     ds.borderDash = undefined;  // 清掉上轮可能加的虚线
     ds.data = ds._realData.map((v, i) => {
-      if (v == null) return null;
-      if (ds._isSynthetic[i]) return useLog ? yMin : 0;
-      if (!useLog) return v;
-      if (v <= 0)      return null;        // 对数轴无法表示 0
-      if (v > yMax)    return yMax;
-      if (v < yMin)    return yMin;
-      return v;
+      const x = xs[i];
+      if (v == null) return { x, y: null };
+      if (ds._isSynthetic[i]) return { x, y: useLog ? yMin : 0 };
+      if (!useLog) return { x, y: v };
+      if (v <= 0)      return { x, y: null };  // 对数轴无法表示 0
+      if (v > yMax)    return { x, y: yMax };
+      if (v < yMin)    return { x, y: yMin };
+      return { x, y: v };
     });
     // 整段越界 → 虚线提示（仅对数模式下可能发生）
     if (useLog) {
@@ -642,7 +677,7 @@ export function buildMultiChart(metric) {
   if (S.charts.multi) S.charts.multi.destroy();
   S.charts.multi = new Chart(getCtx('multi', 'chart-multi'), {
     type: 'line',
-    data: { labels: chartLabels, datasets },
+    data: { datasets },
     options: {
       responsive: true, maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
@@ -651,15 +686,18 @@ export function buildMultiChart(metric) {
         tooltip: {
           // 合成 0（标记新视频"诞生时刻"的辅助点）不参与 tooltip，避免显示 "0" 误导
           filter: c => !(c.dataset._isSynthetic && c.dataset._isSynthetic[c.dataIndex]),
-          callbacks: { label: c => {
-            const real = c.dataset._realData || c.dataset.data;
-            const v = real[c.dataIndex];
-            return v == null ? '' : ` ${c.dataset.label}：${fmtFull(v)}`;
-          } }
+          callbacks: {
+            title: _timeTooltipTitle,
+            label: c => {
+              const real = c.dataset._realData || c.dataset.data;
+              const v = real[c.dataIndex];
+              return v == null ? '' : ` ${c.dataset.label}：${fmtFull(v)}`;
+            }
+          }
         }
       },
       scales: {
-        x: { grid: { display: false }, ticks: { maxTicksLimit: 8, color: '#94a3b8' } },
+        x: _timeScaleX(8, xs[0], xs[xs.length - 1]),
         y: yType === 'logarithmic'
           ? {
               type: 'logarithmic', min: yMin, max: yMax,
@@ -711,56 +749,60 @@ export function buildMultiChart(metric) {
 }
 
 // ── 播放增量折线图 ────────────────────────────────────────────────────
+// 跨空窗的相邻对记 null（断线而非虚线）：其增量是整段中断期的累计增长，
+// 没有"每间隔速率"语义，虚线连接两个速率值是编造；累计图（趋势/多折线）
+// 的插值才有可信度。
 export function buildDeltaChart() {
   const allSnaps = gWindowedSnaps();
   if (allSnaps.length < 2) { document.getElementById('delta-card').style.display = 'none'; return; }
   document.getElementById('delta-card').style.display = '';
 
-  // 先计算每相邻快照间的原始增量
-  const rawDeltas = [];
-  const rawTimes  = [];
+  // 相邻快照差值对 {a, b, v}：a/b 为两端毫秒时间，v 为增量（空窗对为 null）。
+  // 时间已按分钟归一化，间隔大于常规采集间隔 ⟺ 中间缺了槽位（精确判断）。
+  const interval = inferIntervalMs(allSnaps);
+  const pairs = [];
   for (let i = 1; i < allSnaps.length; i++) {
-    const ps = filterEps(allSnaps[i - 1]).reduce((s, e) => s + (e.view || 0), 0);
-    const cs = filterEps(allSnaps[i]).reduce(  (s, e) => s + (e.view || 0), 0);
-    rawDeltas.push(cs - ps);
-    rawTimes.push(allSnaps[i].time);
+    const a = parseBeijingTime(allSnaps[i - 1].time).getTime();
+    const b = parseBeijingTime(allSnaps[i].time).getTime();
+    let v = null;
+    if (b - a <= interval) {
+      const ps = filterEps(allSnaps[i - 1]).reduce((s, e) => s + (e.view || 0), 0);
+      const cs = filterEps(allSnaps[i]).reduce(  (s, e) => s + (e.view || 0), 0);
+      v = cs - ps;
+    }
+    pairs.push({ a, b, v });
   }
 
-  // 分数权重重采样：面积守恒，无数据丢失
-  // 每个输入点按其与输出桶的重叠比例分配权重，边界点按比例贡献给相邻两桶
-  let labels, data;
-  const dsmDelta = getDownsampleMax();
-  if (rawDeltas.length <= dsmDelta) {
-    labels = rawTimes.map(fmtTimeLabel);
-    data   = rawDeltas;
+  // 点太多时按时间等宽桶重采样：每个增量对按时间重叠比例把增量分配进桶
+  // （面积守恒）；空窗对不贡献，落在空窗内的桶自然无贡献 → null（断线）。
+  let data;
+  const N  = getDownsampleMax();
+  const t0 = pairs[0].a, t1 = pairs[pairs.length - 1].b;
+  if (pairs.length <= N) {
+    data = pairs.map(p => ({ x: p.b, y: p.v }));
   } else {
-    const M = rawDeltas.length;
-    const N = dsmDelta;
-    const outData = new Array(N).fill(0);
-    for (let i = 0; i < M; i++) {
-      const lo = i * N / M;
-      const hi = (i + 1) * N / M;
+    const bw  = (t1 - t0) / N;
+    const sum = new Array(N).fill(0);
+    const has = new Array(N).fill(false);
+    for (const p of pairs) {
+      if (p.v == null) continue;
+      const lo = (p.a - t0) / bw, hi = (p.b - t0) / bw;
       const bStart = Math.floor(lo);
       const bEnd   = Math.min(Math.ceil(hi) - 1, N - 1);
       for (let b = bStart; b <= bEnd; b++) {
-        const ovLo = Math.max(lo, b);
-        const ovHi = Math.min(hi, b + 1);
+        const ovLo = Math.max(lo, b), ovHi = Math.min(hi, b + 1);
         if (ovHi <= ovLo) continue;
-        outData[b] += rawDeltas[i] * (ovHi - ovLo) * M / N; // weight = overlap / (N/M)
+        sum[b] += p.v * (ovHi - ovLo) / (hi - lo);
+        has[b] = true;
       }
     }
-    data = outData.map(Math.round);
-    // 标签取每个输出桶中心对应的输入时间
-    labels = Array.from({ length: N }, (_, b) => {
-      const idx = Math.min(Math.round((b + 0.5) * M / N), M - 1);
-      return fmtTimeLabel(rawTimes[idx]);
-    });
+    data = sum.map((v, b) => ({ x: Math.round(t0 + (b + 0.5) * bw), y: has[b] ? Math.round(v) : null }));
   }
 
   if (S.charts.delta) S.charts.delta.destroy();
   S.charts.delta = new Chart(getCtx('delta', 'chart-delta'), {
     type: 'line',
-    data: { labels, datasets: [{
+    data: { datasets: [{
       label: '播放增量', data,
       borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,0.08)',
       borderWidth: 2, fill: true, tension: 0.35,
@@ -775,10 +817,13 @@ export function buildDeltaChart() {
       interaction: { mode: 'index', intersect: false },
       plugins: {
         legend: { display: false },
-        tooltip: { callbacks: { label: c => ` 增量：${fmtFull(c.raw)}` } }
+        tooltip: { callbacks: {
+          title: _timeTooltipTitle,
+          label: c => c.parsed.y == null ? ' 采集中断（无数据）' : ` 增量：${fmtFull(c.parsed.y)}`
+        } }
       },
       scales: {
-        x: { grid: { display: false }, ticks: { maxTicksLimit: 12, color: '#94a3b8' } },
+        x: _timeScaleX(12, t0, t1),
         y: { grid: { color: '#f1f5f9' }, ticks: { color: '#94a3b8', callback: fmtAxis } }
       }
     }

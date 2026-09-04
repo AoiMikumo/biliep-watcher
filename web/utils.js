@@ -38,6 +38,13 @@ export function fmtDate(ts) {
 // ── 时间解析与格式化 ─────────────────────────────────────────────────
 // 将 "2024-01-01 10:00:00" 解析为北京时区的 Date 对象
 export const parseBeijingTime = s => new Date(s.replace(' ', 'T') + '+08:00');
+// fmtBeijingTime：parseBeijingTime 的逆运算（Date → "YYYY-MM-DD HH:MM:SS" 北京时间）
+export function fmtBeijingTime(d) {
+  const t = new Date(d.getTime() + 8 * 3600 * 1000);
+  const p = n => String(n).padStart(2, '0');
+  return `${t.getUTCFullYear()}-${p(t.getUTCMonth() + 1)}-${p(t.getUTCDate())} ` +
+    `${p(t.getUTCHours())}:${p(t.getUTCMinutes())}:${p(t.getUTCSeconds())}`;
+}
 // 将快照时间字符串缩短为图表刻度标签，如 "01-01 10:00"
 export function fmtTimeLabel(s) {
   const p = s.split(' ');
@@ -45,6 +52,54 @@ export function fmtTimeLabel(s) {
   const dp = p[0].split('-');
   return `${dp[1]}-${dp[2]} ${p[1].substring(0, 5)}`;
 }
+
+// ── 采集时间归一化与空窗检测 ─────────────────────────────────────────
+// 采集的最小粒度是分钟，秒级读数只是写入抖动：读取端把快照时间四舍五入到
+// 整分钟——:57~:59 的提前写入归入它瞄准的下一分钟槽位，:00~:02 的迟到写入
+// 落回本槽位；同一分钟的重复快照合并（后写者胜，它才是对齐后的那次采集）。
+// 归一化后相邻时间差恰为采集间隔的整数倍，空窗判断就是精确算术，无需模糊阈值。
+export function normalizeSnapTimes(snaps) {
+  const out = [];
+  for (const s of snaps) {
+    const ms  = parseBeijingTime(s.time).getTime();
+    const min = fmtBeijingTime(new Date(Math.round(ms / 60000) * 60000));
+    if (out.length && out[out.length - 1].time === min) {
+      out[out.length - 1] = { ...s, time: min };
+    } else {
+      out.push(min === s.time ? s : { ...s, time: min });
+    }
+  }
+  return out;
+}
+
+// 推断采集间隔：相邻快照时间差的中位数（对偶发空窗稳健），兜底 10 分钟
+export function inferIntervalMs(snaps) {
+  const diffs = [];
+  for (let i = 1; i < snaps.length; i++) {
+    const d = parseBeijingTime(snaps[i].time) - parseBeijingTime(snaps[i - 1].time);
+    if (d > 0) diffs.push(d);
+  }
+  if (!diffs.length) return 10 * 60 * 1000;
+  diffs.sort((a, b) => a - b);
+  return diffs[Math.floor(diffs.length / 2)];
+}
+
+// 采集空窗区间列表 [[startMs, endMs], ...]：相邻快照间隔大于常规间隔即中断
+// （归一化后的时间差是间隔的整数倍，大于一个间隔 ⟺ 至少缺一个槽位）
+export function findGapRanges(snaps) {
+  if (snaps.length < 2) return [];
+  const interval = inferIntervalMs(snaps);
+  const ranges = [];
+  for (let i = 1; i < snaps.length; i++) {
+    const t0 = parseBeijingTime(snaps[i - 1].time).getTime();
+    const t1 = parseBeijingTime(snaps[i].time).getTime();
+    if (t1 - t0 > interval) ranges.push([t0, t1]);
+  }
+  return ranges;
+}
+
+// 毫秒时间戳 → 图表刻度标签，如 "01-01 10:00"
+export const fmtMsLabel = ms => fmtTimeLabel(fmtBeijingTime(new Date(ms)));
 
 // ── 字符串工具 ───────────────────────────────────────────────────────
 // 截断标题到 max 个字符（超出加省略号）
